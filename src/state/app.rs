@@ -2800,7 +2800,7 @@ mod tests {
     use super::*;
     use crate::core::db::Database;
     use crate::core::filters::{Category, ClipboardFilters};
-    use crate::core::settings::AppSettings;
+    use crate::core::settings::{AppSettings, TypeFilterEntry};
     use crate::core::types::{ClipboardItem, ContentType, RichData};
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
@@ -2854,6 +2854,146 @@ mod tests {
             webdav_username: String::new(),
             webdav_password: String::new(),
         }
+    }
+
+    // --- Category strip cycling (⌘[ / ⌘] and the bare arrow keys). ---
+
+    fn tag(id: i64, name: &str) -> crate::core::types::TagInfo {
+        crate::core::types::TagInfo {
+            id,
+            uid: String::new(),
+            name: name.to_string(),
+            color: "3B82F6".to_string(),
+            updated_at: String::new(),
+        }
+    }
+
+    /// A strip of: All, two visible types (one hidden type in between, which
+    /// must not appear), and one pinned tag.
+    fn strip_state() -> AppState {
+        let (mut state, _) = test_state();
+        state.settings.type_filter_config = vec![
+            TypeFilterEntry { key: "image".into(), visible: true },
+            TypeFilterEntry { key: "link".into(), visible: false },
+            TypeFilterEntry { key: "file".into(), visible: true },
+        ];
+        state.settings.pinned_tag_ids = vec![5];
+        state.tags = vec![tag(5, "work")];
+        state
+    }
+
+    #[test]
+    fn cycle_shows_all_visible_types_and_pinned_tags() {
+        let state = strip_state();
+
+        assert_eq!(
+            state.category_cycle(),
+            vec![
+                Category::All,
+                Category::Type("image".into()),
+                Category::Type("file".into()),
+                Category::Tag(5),
+            ],
+            "hidden types stay out of the cycle; pinned tags come after the types"
+        );
+    }
+
+    #[test]
+    fn cycle_skips_pinned_tags_that_no_longer_exist() {
+        let mut state = strip_state();
+        state.settings.pinned_tag_ids = vec![5, 99];
+
+        assert_eq!(
+            state.category_cycle(),
+            vec![
+                Category::All,
+                Category::Type("image".into()),
+                Category::Type("file".into()),
+                Category::Tag(5),
+            ],
+            "tag 99 was deleted; a strip position with nothing behind it is a dead key"
+        );
+    }
+
+    #[test]
+    fn stepping_forward_walks_the_strip_and_wraps() {
+        let mut state = strip_state();
+
+        state.cycle_type_filter(1);
+        assert_eq!(state.filters.active_types(), ["image"]);
+
+        state.cycle_type_filter(1);
+        assert_eq!(state.filters.active_types(), ["file"]);
+
+        state.cycle_type_filter(1);
+        assert!(state.filters.active_types().is_empty());
+        assert_eq!(state.filters.tag_ids, [5], "last position is the pinned tag");
+
+        state.cycle_type_filter(1);
+        assert!(state.filters.active_types().is_empty());
+        assert!(state.filters.tag_ids.is_empty(), "wraps back to All");
+    }
+
+    #[test]
+    fn stepping_back_from_all_reaches_the_last_category() {
+        let mut state = strip_state();
+
+        state.cycle_type_filter(-1);
+
+        assert_eq!(state.filters.tag_ids, [5]);
+        assert!(state.filters.active_types().is_empty());
+    }
+
+    #[test]
+    fn an_empty_category_is_not_a_dead_end() {
+        // The strip is driven by settings, not by what happens to be in the
+        // list, so a category with no items still steps on. This is the bug
+        // where landing on an empty category made every further press do
+        // nothing.
+        let mut state = strip_state();
+        assert!(state.items.is_empty(), "in-memory db: every category is empty");
+
+        state.cycle_type_filter(1);
+        assert_eq!(state.filters.active_types(), ["image"]);
+
+        state.cycle_type_filter(1);
+        assert_eq!(state.filters.active_types(), ["file"], "still moving");
+    }
+
+    #[test]
+    fn a_clicked_combination_resolves_to_a_single_category() {
+        // Clicking can light several buttons at once; types and tags are ANDed,
+        // so the combination usually shows nothing. One arrow press must leave
+        // exactly one category selected rather than adding to the pile.
+        let mut state = strip_state();
+        state.filters.toggle_type("image");
+        state.filters.toggle_type("file");
+        state.filters.tag_ids = vec![5];
+
+        state.cycle_type_filter(1);
+
+        assert_eq!(
+            state.filters.active_types(),
+            ["image"],
+            "a combination reads as All, so one step forward lands on the first type"
+        );
+        assert!(state.filters.tag_ids.is_empty());
+    }
+
+    #[test]
+    fn a_strip_with_nothing_to_cycle_does_nothing() {
+        let (mut state, _) = test_state();
+        state.settings.type_filter_config = Vec::new();
+        state.settings.pinned_tag_ids = Vec::new();
+        state.filters.toggle_type("image");
+
+        state.cycle_type_filter(1);
+
+        assert_eq!(
+            state.filters.active_types(),
+            ["image"],
+            "only All in the cycle: leave the filters alone rather than clearing them"
+        );
     }
 
     fn test_state() -> (AppState, Arc<AtomicBool>) {

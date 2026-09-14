@@ -346,4 +346,78 @@ mod tests {
         assert!(!where_sql.contains("content_type = 'file'"));
         assert!(params.is_empty());
     }
+
+    // --- Category strip: stepping through it is a single choice. ---
+    // --- These encode the two failures that made the strip unusable: ---
+    // --- several buttons lit at once, and a type+tag combination that ---
+    // --- ANDed down to an empty list. ---
+
+    #[test]
+    fn set_single_type_replaces_rather_than_accumulates() {
+        let mut filters = ClipboardFilters::default();
+        filters.toggle_type("image");
+        filters.toggle_type("link");
+        assert_eq!(filters.active_types().len(), 2, "precondition: two types lit");
+
+        filters.set_single_type(Some("file"));
+
+        assert_eq!(filters.active_types(), ["file"]);
+    }
+
+    #[test]
+    fn set_single_type_none_selects_all() {
+        let mut filters = ClipboardFilters::default();
+        filters.toggle_type("image");
+
+        filters.set_single_type(None);
+
+        assert!(filters.active_types().is_empty());
+        assert!(filters.tag_ids.is_empty());
+    }
+
+    #[test]
+    fn set_single_tag_drops_the_type_selection() {
+        // Types and tags are ANDed in db_where(), so a leftover type turns
+        // "show me tag 7" into "tag 7 that is also an image" — usually empty.
+        let mut filters = ClipboardFilters::default();
+        filters.toggle_type("image");
+
+        filters.set_single_tag(7);
+
+        assert!(filters.active_types().is_empty());
+        assert_eq!(filters.tag_ids, [7]);
+
+        let (where_sql, _) = filters.db_where();
+        assert!(
+            !where_sql.contains("content_type"),
+            "tag selection must not carry a type condition: {where_sql}"
+        );
+    }
+
+    #[test]
+    fn set_single_tag_replaces_the_previous_tag() {
+        let mut filters = ClipboardFilters::default();
+        filters.set_single_tag(3);
+        filters.set_single_tag(9);
+
+        assert_eq!(filters.tag_ids, [9]);
+    }
+
+    #[test]
+    fn clear_strip_leaves_the_dimensions_other_controls_own() {
+        let mut filters = ClipboardFilters::default();
+        filters.toggle_type("image");
+        filters.set_single_tag(4);
+        filters.toggle_favorites_only();
+        filters.toggle_hotkeys_only();
+        filters.set_keyword("invoice");
+
+        filters.clear_strip();
+
+        assert!(filters.active_types().is_empty());
+        assert!(filters.tag_ids.is_empty());
+        assert!(filters.is_favorites_active(), "favourites is not the strip's to clear");
+        assert!(filters.is_hotkeys_active(), "hotkeys is not the strip's to clear");
+        assert!(filters.has_keyword(), "the search box owns the keyword");
+    }
 }
