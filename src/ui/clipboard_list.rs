@@ -2507,6 +2507,20 @@ impl Render for ClipboardListView {
                         return;
                     }
 
+                    // --- Cmd+left/right — switch category, matching the
+                    // search box so the same keys work wherever focus is ---
+                    if ctrl && !shift && (key == "left" || key == "right") {
+                        this.dismiss_all_panels(cx);
+                        let delta = if key == "left" { -1 } else { 1 };
+                        let items = this.state.update(cx, |state, _cx| {
+                            state.cycle_type_filter(delta);
+                            state.visible_items()
+                        });
+                        this.set_items(items, cx);
+                        cx.stop_propagation();
+                        return;
+                    }
+
                     // --- Shift+Enter — paste as plain text ---
                     if shift && key == "enter" {
                         // Floating-panel guard handled by `action_paste`.

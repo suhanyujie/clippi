@@ -71,6 +71,8 @@
 - Favorites & notes: pin favorite snippets and add notes to entries
 - Multi-select batch operations: batch paste (newline-separated), batch favorite, batch delete, batch tag
 - Combined type filters: freely mix multiple filter rules
+- Arrow-key categories: `←` / `→` step through the strip above the list while the
+  search box is empty, or `⌘←` / `⌘→` at any time
 - Keyword search — matches both text content and tag names
 - Tag filtering — switchable AND/OR logic across multiple tags
 - Sorting: by creation time / by last used time

@@ -25,6 +25,22 @@ fn primary_modifier_pressed(modifiers: Modifiers) -> bool {
     modifiers.secondary()
 }
 
+/// Step the category strip and hand the new items to the list.
+///
+/// Shared by the bare-arrow and Cmd+arrow paths so the two cannot drift apart.
+fn cycle_category(
+    state: &Entity<AppState>,
+    list: &Entity<ClipboardListView>,
+    delta: isize,
+    cx: &mut App,
+) {
+    let items = state.update(cx, |state, _cx| {
+        state.cycle_type_filter(delta);
+        state.visible_items()
+    });
+    list.update(cx, |list, cx| list.set_items(items, cx));
+}
+
 pub struct SearchBox {
     input: Entity<InputState>,
     state: Entity<AppState>,
@@ -179,22 +195,18 @@ impl Render for SearchBox {
                                     // --- left/right — step through the category
                                     // strip above the list.
                                     //
-                                    // Only while the box is empty. Once there is
-                                    // something typed these keys belong to the
+                                    // Bare arrows only while the box is empty.
+                                    // Once something is typed they belong to the
                                     // text cursor, and taking them would make it
                                     // impossible to go back and fix a typo. An
-                                    // empty box is also exactly the state the
-                                    // window opens in, which is when reaching for
-                                    // a category is natural.
+                                    // empty box is the state the window opens in,
+                                    // which is when reaching for a category is
+                                    // natural; Cmd+arrow below covers the rest.
                                     "left" | "right"
                                         if input_for_keys.read(cx).value().is_empty() =>
                                     {
                                         let delta = if key == "left" { -1 } else { 1 };
-                                        let items = app_state.update(cx, |state, _cx| {
-                                            state.cycle_type_filter(delta);
-                                            state.visible_items()
-                                        });
-                                        list.update(cx, |list, cx| list.set_items(items, cx));
+                                        cycle_category(&app_state, &list, delta, cx);
                                         cx.stop_propagation();
                                         return;
                                     }
@@ -241,6 +253,23 @@ impl Render for SearchBox {
                                     cx.stop_propagation();
                                 }
                                 // Ctrl+D — toggle favorite
+                                // Cmd+left/right — switch category with text in
+                                // the box.
+                                //
+                                // The cost is Home/End, which Cmd+arrow means in
+                                // a text field. In a one-line search box that is
+                                // a few presses of the bare arrow keys; being
+                                // able to change category without clearing the
+                                // query is worth more. Cmd+[ and Cmd+] are free
+                                // if that trade ever looks wrong.
+                                (true, false, "left") => {
+                                    cycle_category(&app_state, &list, -1, cx);
+                                    cx.stop_propagation();
+                                }
+                                (true, false, "right") => {
+                                    cycle_category(&app_state, &list, 1, cx);
+                                    cx.stop_propagation();
+                                }
                                 (true, false, "d") => {
                                     list.update(cx, |list, cx| {
                                         list.focus(window);
