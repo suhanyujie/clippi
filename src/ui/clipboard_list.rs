@@ -2392,6 +2392,49 @@ impl Render for ClipboardListView {
                 .h_full()
                 .w_full()
                 .overflow_hidden()
+                // Keep the focus handle alive even with nothing to show.
+                // Without it the focused element vanishes the moment a filter
+                // matches nothing, focus goes with it, and every key after that
+                // lands nowhere — so an empty category became a dead end you
+                // could only leave with the mouse.
+                .track_focus(&focus_handle)
+                .on_key_down(window.listener_for(&view, |this, event: &KeyDownEvent, window, cx| {
+                    let key = event.keystroke.key.as_str();
+                    let ctrl = primary_modifier_pressed(event.keystroke.modifiers);
+                    let shift = event.keystroke.modifiers.shift;
+
+                    // Only the keys that still mean something here. With no
+                    // items there is nothing to select, paste or favourite;
+                    // what is left is getting out of the empty category.
+                    match (ctrl, shift, key) {
+                        (true, false, "[") | (true, false, "]") => {
+                            let delta = if key == "[" { -1 } else { 1 };
+                            let items = this.state.update(cx, |state, _cx| {
+                                state.cycle_type_filter(delta);
+                                state.visible_items()
+                            });
+                            this.set_items(items, cx);
+                            cx.stop_propagation();
+                        }
+                        (false, false, "left") | (false, false, "right") => {
+                            let delta = if key == "left" { -1 } else { 1 };
+                            let items = this.state.update(cx, |state, _cx| {
+                                state.cycle_type_filter(delta);
+                                state.visible_items()
+                            });
+                            this.set_items(items, cx);
+                            cx.stop_propagation();
+                        }
+                        (true, false, "f") => {
+                            // Cmd+F — back to the search box, the other way out.
+                            if let Some(ref search_bar) = this.search_bar {
+                                search_bar.update(cx, |bar, cx| bar.focus(window, cx));
+                            }
+                            cx.stop_propagation();
+                        }
+                        _ => {}
+                    }
+                }))
                 .flex()
                 .flex_col()
                 .items_center()
@@ -2502,22 +2545,21 @@ impl Render for ClipboardListView {
                                 this.action_show_tag_picker(cx);
                                 cx.stop_propagation();
                             }
+                            // Cmd+[ / Cmd+] — step through the category strip,
+                            // matching the search box so the same keys work
+                            // wherever focus happens to be.
+                            "[" | "]" if !shift => {
+                                this.dismiss_all_panels(cx);
+                                let delta = if key == "[" { -1 } else { 1 };
+                                let items = this.state.update(cx, |state, _cx| {
+                                    state.cycle_type_filter(delta);
+                                    state.visible_items()
+                                });
+                                this.set_items(items, cx);
+                                cx.stop_propagation();
+                            }
                             _ => {}
                         }
-                        return;
-                    }
-
-                    // --- Cmd+[ / Cmd+] — switch category, matching the search
-                    // box so the same keys work wherever focus is ---
-                    if ctrl && !shift && (key == "[" || key == "]") {
-                        this.dismiss_all_panels(cx);
-                        let delta = if key == "[" { -1 } else { 1 };
-                        let items = this.state.update(cx, |state, _cx| {
-                            state.cycle_type_filter(delta);
-                            state.visible_items()
-                        });
-                        this.set_items(items, cx);
-                        cx.stop_propagation();
                         return;
                     }
 
