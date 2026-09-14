@@ -5,7 +5,7 @@
 //! --- entity subscription/observation mechanism. ---
 
 use crate::core::db::Database;
-use crate::core::filters::ClipboardFilters;
+use crate::core::filters::{Category, ClipboardFilters};
 use crate::core::html_text;
 use crate::core::i18n_keys::I18nKey;
 use crate::core::settings::AppSettings;
@@ -616,62 +616,85 @@ impl AppState {
         self.reload_items();
     }
 
-    /// The categories the arrow keys step through: "all", then every visible
-    /// type filter in the order the user arranged them in settings.
+    /// The categories the arrow keys step through: "all", every visible type
+    /// filter in the order the user arranged them, then every tag they pinned.
     ///
-    /// Follows `type_filter_config` rather than the built-in list, because
-    /// which buttons are shown and in what order is the user's choice, and a
-    /// cycle that disagreed with the bar it is cycling would be baffling.
-    fn category_cycle(&self) -> Vec<Option<&str>> {
-        let mut cycle: Vec<Option<&str>> = vec![None];
+    /// Follows `type_filter_config` and `pinned_tag_ids` rather than any list of
+    /// its own, because what the strip shows is the user's choice and a cycle
+    /// that disagreed with the strip it cycles would be baffling.
+    pub fn category_cycle(&self) -> Vec<Category> {
+        let mut cycle = vec![Category::All];
         cycle.extend(
             self.settings
                 .type_filter_config
                 .iter()
                 .filter(|entry| entry.visible)
-                .map(|entry| Some(entry.key.as_str())),
+                .map(|entry| Category::Type(entry.key.clone())),
+        );
+        // Pinned tags, in the order they were pinned, skipping any that have
+        // since been deleted.
+        cycle.extend(
+            self.settings
+                .pinned_tag_ids
+                .iter()
+                .filter(|id| self.tags.iter().any(|t| t.id == **id))
+                .map(|id| Category::Tag(*id)),
         );
         cycle
+    }
+
+    /// Which position in the strip the current filters correspond to.
+    ///
+    /// A combination built by clicking — two types, or a type and a tag — has no
+    /// single position, so it reads as "all": the arrow keys choose one category
+    /// and start over rather than trying to guess where a combination sits.
+    fn current_category(&self, cycle: &[Category]) -> usize {
+        let types = self.filters.active_types();
+        let tags = &self.filters.tag_ids;
+
+        let current = match (types, tags.as_slice()) {
+            ([only], []) => Category::Type(only.clone()),
+            ([], [only]) => Category::Tag(*only),
+            _ => Category::All,
+        };
+        cycle.iter().position(|c| *c == current).unwrap_or(0)
     }
 
     /// Step to the next or previous category and reload.
     ///
     /// Wraps: the strip is short and circular, so one press left from "all"
     /// should reach the last category rather than doing nothing.
-    ///
-    /// A multi-type selection built by clicking has no single position in the
-    /// cycle, so stepping from it starts over from "all" — arrow keys choose
-    /// one category, the mouse still combines several.
     pub fn cycle_type_filter(&mut self, delta: isize) {
         let cycle = self.category_cycle();
         if cycle.len() < 2 {
             return;
         }
 
-        let active = self.filters.active_types();
-        let current = match active {
-            [only] => cycle.iter().position(|slot| *slot == Some(only.as_str())).unwrap_or(0),
-            _ => 0,
-        };
-
+        let current = self.current_category(&cycle);
         let len = cycle.len() as isize;
         let next = (((current as isize + delta) % len) + len) % len;
-        let chosen = cycle[next as usize].map(|key| key.to_string());
-        // Read what is needed before the borrow of `self.settings` ends.
+        let chosen = cycle[next as usize].clone();
         let total = cycle.len();
 
-        self.filters.set_single_type(chosen.as_deref());
+        match &chosen {
+            Category::All => self.filters.clear_strip(),
+            Category::Type(key) => {
+                self.filters.clear_strip();
+                self.filters.set_single_type(Some(key));
+            }
+            Category::Tag(id) => self.filters.set_single_tag(*id),
+        }
         self.selected_ids.clear();
         self.reload_items();
 
         // Which category this landed on, and whether it has anything in it. An
         // empty category looks exactly like a key that did nothing.
         log::info!(
-            "category {} -> {} of {} ({}), {} item(s)",
+            "category {} -> {} of {} ({:?}), {} item(s)",
             current,
             next,
             total,
-            chosen.as_deref().unwrap_or("all"),
+            chosen,
             self.items.len(),
         );
     }
@@ -2776,7 +2799,7 @@ fn transfer_item_id(hash: &str) -> i64 {
 mod tests {
     use super::*;
     use crate::core::db::Database;
-    use crate::core::filters::ClipboardFilters;
+    use crate::core::filters::{Category, ClipboardFilters};
     use crate::core::settings::AppSettings;
     use crate::core::types::{ClipboardItem, ContentType, RichData};
     use std::sync::atomic::Ordering;

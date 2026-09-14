@@ -73,6 +73,8 @@
 - Combined type filters: freely mix multiple filter rules
 - Arrow-key categories: `←` / `→` step through the strip above the list while the
   search box is empty, or `⌘[` / `⌘]` at any time
+- Pinned tags join the strip: a tag pinned in the tag panel appears after the
+  type buttons and is included in the arrow-key cycle
 - Keyword search — matches both text content and tag names
 - Tag filtering — switchable AND/OR logic across multiple tags
 - Sorting: by creation time / by last used time

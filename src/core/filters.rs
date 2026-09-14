@@ -47,6 +47,18 @@ pub struct ClipboardFilters {
     tag_match_all: bool,
 }
 
+/// One position in the category strip above the list.
+///
+/// The strip mixes content types with the tags the user pinned; both narrow the
+/// same list, so stepping through them is one sequence rather than two.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Category {
+    /// No narrowing at all.
+    All,
+    Type(String),
+    Tag(i64),
+}
+
 impl ClipboardFilters {
     /// Toggle a content type filter on/off
     pub fn toggle_type(&mut self, type_name: &str) {
@@ -60,6 +72,25 @@ impl ClipboardFilters {
     /// The content types currently filtered on, in the order they were added.
     pub fn active_types(&self) -> &[String] {
         &self.type_filters
+    }
+
+    /// Clear everything the category strip owns, leaving the dimensions other
+    /// controls own — favourites, hotkeys, keyword — untouched.
+    ///
+    /// Stepping through the strip is a single choice, so it starts from a clean
+    /// strip every time. Without this, arrowing after clicking left the two
+    /// combined: several buttons lit at once and, because types and tags are
+    /// ANDed together, often nothing to show for it.
+    pub fn clear_strip(&mut self) {
+        self.type_filters.clear();
+        self.tag_ids.clear();
+    }
+
+    /// Filter on exactly one tag, replacing whatever the strip held.
+    pub fn set_single_tag(&mut self, tag_id: i64) {
+        self.type_filters.clear();
+        self.tag_ids.clear();
+        self.tag_ids.push(tag_id);
     }
 
     /// Replace the whole type filter with a single type, or clear it.

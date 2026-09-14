@@ -14,6 +14,7 @@ use crate::core::i18n_keys::I18nKey;
 use crate::state::app::AppState;
 
 use super::clipboard_list::ClipboardListView;
+use super::sidebar::parse_tag_color;
 use super::theme::ClippiTheme;
 
 pub(crate) struct FilterDef {
@@ -136,6 +137,23 @@ impl FilterBar {
         cx.notify();
     }
 
+    /// Narrow to a single pinned tag, or clear it if it was already the one.
+    ///
+    /// Clicking a tag chip in the strip behaves like clicking a type button:
+    /// it toggles. The arrow keys are the single-select path.
+    fn apply_tag_filter(
+        state: &Entity<AppState>,
+        list_view: &Entity<ClipboardListView>,
+        tag_id: i64,
+        cx: &mut App,
+    ) {
+        let items = state.update(cx, |state, _cx| {
+            state.toggle_tag_filter(tag_id);
+            state.visible_items()
+        });
+        list_view.update(cx, |list, cx| list.set_items(items, cx));
+    }
+
     fn apply_type_filter(
         state: &Entity<AppState>,
         list_view: &Entity<ClipboardListView>,
@@ -167,7 +185,16 @@ impl Render for FilterBar {
             .iter()
             .filter(|e| e.visible)
             .collect();
-        let visible_count = visible_entries.len() as f32;
+        // Tags the user pinned sit in the same strip as the type buttons, so
+        // they share the same width budget.
+        let pinned_tags: Vec<crate::core::types::TagInfo> = state_snapshot
+            .settings
+            .pinned_tag_ids
+            .iter()
+            .filter_map(|id| state_snapshot.tags.iter().find(|t| t.id == *id).cloned())
+            .collect();
+        let active_tag_ids = state_snapshot.filters.tag_ids.clone();
+        let visible_count = (visible_entries.len() + pinned_tags.len()) as f32;
         let type_toolbar_width = (toolbar_width
             - (TOOLBAR_GROUP_GAP * 2.0)
             - TOOLBAR_DIVIDER_WIDTH
@@ -307,8 +334,64 @@ impl Render for FilterBar {
                                             )
                                         }),
                                 )
-                            }),
-                    ),
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                    .children(pinned_tags.iter().enumerate().map(|(index, tag)| {
+                        let is_active = active_tag_ids.contains(&tag.id);
+                        let tag_color = parse_tag_color(&tag.color);
+                        let state = self.state.clone();
+                        let list_view = self.list_view.clone();
+                        let this = this.clone();
+                        let tag_id = tag.id;
+                        let label = tag.name.clone();
+
+                        div()
+                            .id(("filter-tag", index))
+                            .h(px(22.))
+                            .flex_1()
+                            .min_w(px(0.))
+                            .justify_center()
+                            .px(px(5.))
+                            .gap(px(3.))
+                            .flex_shrink_0()
+                            .rounded(px(5.))
+                            .bg(if is_active {
+                                theme.accent_overlay()
+                            } else {
+                                inactive_button_bg
+                            })
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .cursor(CursorStyle::PointingHand)
+                            .on_mouse_down(MouseButton::Left, move |_ev, _window, cx| {
+                                Self::apply_tag_filter(&state, &list_view, tag_id, cx);
+                                this.update(cx, |_bar, cx| cx.notify());
+                            })
+                            // A dot in the tag's own colour, so a pinned tag is
+                            // recognisable at a glance among the type buttons.
+                            .child(
+                                div()
+                                    .w(px(6.))
+                                    .h(px(6.))
+                                    .rounded_full()
+                                    .bg(tag_color),
+                            )
+                            .when(!icon_only, |button| {
+                                button.child(
+                                    div()
+                                        .text_size(px(11.))
+                                        .font_weight(if is_active {
+                                            FontWeight::BOLD
+                                        } else {
+                                            FontWeight::default()
+                                        })
+                                        .text_color(if is_active { accent } else { text_2 })
+                                        .child(label),
+                                )
+                            })
+                    })),
             )
             .child(
                 div()

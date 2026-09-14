@@ -311,7 +311,7 @@ impl Render for Sidebar {
 }
 
 /// Parse a hex color string like "#EF4444" into an Rgba.
-fn parse_tag_color(hex: &str) -> Rgba {
+pub(crate) fn parse_tag_color(hex: &str) -> Rgba {
     let s = hex.trim_start_matches('#');
     if s.len() == 6 {
         let r = u32::from_str_radix(&s[0..2], 16).unwrap_or(0x7e);
