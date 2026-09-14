@@ -749,6 +749,40 @@ impl AppState {
         self.settings.save();
     }
 
+    /// Move a pinned tag one position along the category strip.
+    ///
+    /// Swaps with the nearest neighbour that still exists rather than the
+    /// literal neighbour: `pinned_tag_ids` can hold ids for tags this device
+    /// doesn't have — config sync merges the pinned list across devices, where
+    /// ids differ — and the strip skips those. Swapping with one would read as
+    /// a key that did nothing.
+    pub fn move_pinned_tag(&mut self, tag_id: i64, delta: isize) {
+        let Some(from) = self
+            .settings
+            .pinned_tag_ids
+            .iter()
+            .position(|&id| id == tag_id)
+        else {
+            return;
+        };
+
+        let len = self.settings.pinned_tag_ids.len() as isize;
+        let mut to = from as isize;
+        loop {
+            to += delta;
+            if to < 0 || to >= len {
+                return;
+            }
+            let candidate = self.settings.pinned_tag_ids[to as usize];
+            if self.tags.iter().any(|t| t.id == candidate) {
+                break;
+            }
+        }
+
+        self.settings.pinned_tag_ids.swap(from, to as usize);
+        self.settings.save();
+    }
+
     /// Reload tags from database.
     pub fn reload_tags(&mut self) {
         match self.db.get_all_tags() {
@@ -2978,6 +3012,58 @@ mod tests {
             "a combination reads as All, so one step forward lands on the first type"
         );
         assert!(state.filters.tag_ids.is_empty());
+    }
+
+    #[test]
+    fn moving_a_pinned_tag_changes_its_place_in_the_strip() {
+        let mut state = strip_state();
+        state.settings.pinned_tag_ids = vec![5, 6];
+        state.tags = vec![tag(5, "work"), tag(6, "home")];
+
+        state.move_pinned_tag(6, -1);
+
+        assert_eq!(state.settings.pinned_tag_ids, [6, 5]);
+        assert_eq!(
+            state.category_cycle().last(),
+            Some(&Category::Tag(5)),
+            "the cycle follows the pinned order"
+        );
+    }
+
+    #[test]
+    fn moving_past_either_end_does_nothing() {
+        let mut state = strip_state();
+        state.settings.pinned_tag_ids = vec![5, 6];
+        state.tags = vec![tag(5, "work"), tag(6, "home")];
+
+        state.move_pinned_tag(5, -1);
+        state.move_pinned_tag(6, 1);
+
+        assert_eq!(state.settings.pinned_tag_ids, [5, 6]);
+    }
+
+    #[test]
+    fn moving_skips_pinned_ids_with_no_tag_behind_them() {
+        // Config sync merges pinned lists across devices, where tag ids differ,
+        // so the list can hold ids this device has no tag for. The strip skips
+        // them; swapping with one would look like a key that did nothing.
+        let mut state = strip_state();
+        state.settings.pinned_tag_ids = vec![5, 99, 6];
+        state.tags = vec![tag(5, "work"), tag(6, "home")];
+
+        state.move_pinned_tag(6, -1);
+
+        assert_eq!(state.settings.pinned_tag_ids, [6, 99, 5]);
+    }
+
+    #[test]
+    fn moving_a_tag_that_is_not_pinned_does_nothing() {
+        let mut state = strip_state();
+        state.settings.pinned_tag_ids = vec![5];
+
+        state.move_pinned_tag(6, 1);
+
+        assert_eq!(state.settings.pinned_tag_ids, [5]);
     }
 
     #[test]

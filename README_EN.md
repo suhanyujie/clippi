@@ -73,8 +73,12 @@
 - Combined type filters: freely mix multiple filter rules
 - Arrow-key categories: `←` / `→` step through the strip above the list while the
   search box is empty, or `⌘[` / `⌘]` at any time
-- Pinned tags join the strip: a tag pinned in the tag panel appears after the
-  type buttons and is included in the arrow-key cycle
+- Pinned tags join the strip: a pinned tag appears after the type buttons and
+  is included in the arrow-key cycle
+- Customise the strip: right-click it for a config panel — show, hide and
+  reorder the content types, tick a tag to pin or unpin it, and reorder the
+  pinned ones. The content types are a fixed set of eight; to add a button
+  of your own, make a tag and pin it
 - Keyword search — matches both text content and tag names
 - Tag filtering — switchable AND/OR logic across multiple tags
 - Sorting: by creation time / by last used time
