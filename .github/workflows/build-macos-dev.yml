@@ -1,0 +1,153 @@
+# Build a macOS .app from any branch, without cutting a release.
+#
+# The release pipeline is driven by tags and produces every platform. This one
+# exists to answer a smaller question — "does my branch work?" — and to hand
+# back something installable. Useful in particular when the Metal toolchain is
+# not installed locally: Xcode 26 moved it to a separate download, and gpui
+# compiles its shaders at build time.
+#
+# Run it from the Actions tab (Run workflow → pick a branch), or let it run
+# itself on any push to a feat/ or fix/ branch.
+
+name: Build macOS (dev)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "feat/**"
+      - "fix/**"
+
+concurrency:
+  # A newer push makes an in-flight build of the same branch pointless.
+  group: build-macos-dev-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and bundle
+    # macos-15 still ships Xcode 16, where the metal compiler is part of the
+    # toolchain. On macos-26 it is a separate download — handled below, but it
+    # costs several minutes, so prefer the image that does not need it.
+    runs-on: macos-15
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          # gpui is most of the build; keep its artifacts across runs.
+          cache-on-failure: true
+
+      - name: Select Xcode and the SDK
+        run: |
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
+          echo "MACOSX_DEPLOYMENT_TARGET=12.0" >> "$GITHUB_ENV"
+          xcodebuild -version
+
+      - name: Ensure the Metal toolchain is present
+        run: |
+          # Xcode 26 ships the metal compiler as a separate component. gpui's
+          # build script compiles shaders, so without it the build fails with a
+          # message that looks nothing like a missing download.
+          if xcrun metal --version >/dev/null 2>&1; then
+            echo "metal compiler already available"
+          else
+            echo "downloading the Metal toolchain…"
+            xcodebuild -downloadComponent MetalToolchain
+            xcrun metal --version
+          fi
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Assemble Clippi.app
+        run: |
+          set -euo pipefail
+          VERSION="$(cargo metadata --no-deps --format-version=1 \
+            | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"]=="clippi"))')"
+          APP_DIR="target/Clippi.app"
+
+          rm -rf "$APP_DIR"
+          mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
+          cp target/release/clippi "$APP_DIR/Contents/MacOS/clippi"
+          cp assets/LOGO.icns "$APP_DIR/Contents/Resources/clippi.icns"
+
+          cat > "$APP_DIR/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleDevelopmentRegion</key>            <string>English</string>
+              <key>CFBundleDisplayName</key>                  <string>Clippi</string>
+              <key>CFBundleExecutable</key>                   <string>clippi</string>
+              <key>CFBundleIconFile</key>                     <string>clippi</string>
+              <key>CFBundleIdentifier</key>                   <string>com.clippi.app</string>
+              <key>CFBundleInfoDictionaryVersion</key>        <string>6.0</string>
+              <key>CFBundleName</key>                         <string>Clippi</string>
+              <key>CFBundlePackageType</key>                  <string>APPL</string>
+              <key>CFBundleShortVersionString</key>           <string>${VERSION}</string>
+              <key>CFBundleVersion</key>                      <string>${VERSION}</string>
+              <key>LSMinimumSystemVersion</key>               <string>12.0</string>
+              <key>NSHighResolutionCapable</key>              <true/>
+              <key>NSDesktopFolderUsageDescription</key>      <string>Clippi reads and writes only the desktop folder you choose for database storage or local-folder sync.</string>
+              <key>NSDocumentsFolderUsageDescription</key>    <string>Clippi reads and writes only the documents folder you choose for database storage or local-folder sync.</string>
+              <key>NSDownloadsFolderUsageDescription</key>    <string>Clippi reads and writes only the downloads folder you choose for database storage or local-folder sync.</string>
+              <key>NSNetworkVolumesUsageDescription</key>     <string>Clippi reads and writes only the network folder you choose for local-folder sync.</string>
+              <key>NSRemovableVolumesUsageDescription</key>   <string>Clippi reads and writes only the removable drive folder you choose for database storage or local-folder sync.</string>
+          </dict>
+          </plist>
+          PLIST
+
+          # Same signing as the release pipeline. The requirement override is
+          # what makes an ad-hoc signature usable day to day: without it the
+          # designated requirement embeds this build's hash, so macOS treats
+          # every build as a different application and drops the Accessibility
+          # approval each time.
+          codesign --deep --force --sign - \
+            --requirements '=designated => identifier "com.clippi.app"' \
+            "$APP_DIR"
+
+          plutil -lint "$APP_DIR/Contents/Info.plist"
+          codesign --verify --deep --strict --verbose=2 "$APP_DIR"
+          codesign -v -R='identifier "com.clippi.app"' "$APP_DIR"
+
+      - name: Pack it
+        id: pack
+        run: |
+          # Read the architecture rather than assuming it: the runner label's
+          # architecture has changed before and would silently mislabel the
+          # artifact.
+          ARCH="$(uname -m)"
+          NAME="Clippi-macos-${ARCH}"
+          # ditto, not zip: an .app carries symlinks and extended attributes
+          # that a plain zip drops, and the result opens as "damaged".
+          /usr/bin/ditto -c -k --keepParent target/Clippi.app "target/${NAME}.zip"
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+          echo "built ${NAME}.zip for ${ARCH}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.name }}-${{ github.sha }}
+          path: target/${{ steps.pack.outputs.name }}.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: How to use it
+        run: |
+          cat <<'NOTE'
+          Download the artifact from this run's summary page, then:
+
+              unzip Clippi-macos-*.zip
+              xattr -dr com.apple.quarantine Clippi.app   # it arrived from the internet
+              mv Clippi.app /Applications/
+
+          The bundle is ad-hoc signed with a fixed designated requirement, so an
+          Accessibility approval granted to it survives later builds.
+          NOTE

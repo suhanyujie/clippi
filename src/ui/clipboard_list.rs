@@ -2527,6 +2527,19 @@ impl Render for ClipboardListView {
                             this.select_next(ScrollStrategy::Bottom, cx);
                             cx.stop_propagation();
                         }
+                        // Left/right step through the category strip, the same
+                        // as they do from the search box. The list has no text
+                        // cursor to compete with, so no emptiness check here.
+                        "left" | "right" => {
+                            this.dismiss_all_panels(cx);
+                            let delta = if key == "left" { -1 } else { 1 };
+                            let items = this.state.update(cx, |state, _cx| {
+                                state.cycle_type_filter(delta);
+                                state.visible_items()
+                            });
+                            this.set_items(items, cx);
+                            cx.stop_propagation();
+                        }
                         "enter" => {
                             // Paste with the plain-text setting; floating panels
                             // are dismissed instead by `action_paste`.

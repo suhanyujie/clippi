@@ -57,6 +57,24 @@ impl ClipboardFilters {
         }
     }
 
+    /// The content types currently filtered on, in the order they were added.
+    pub fn active_types(&self) -> &[String] {
+        &self.type_filters
+    }
+
+    /// Replace the whole type filter with a single type, or clear it.
+    ///
+    /// Distinct from `toggle_type`, which builds up a multi-type selection.
+    /// Cycling through categories with the arrow keys is a single choice by
+    /// nature: "show me images" replaces whatever was there rather than adding
+    /// to it.
+    pub fn set_single_type(&mut self, type_name: Option<&str>) {
+        self.type_filters.clear();
+        if let Some(name) = type_name {
+            self.type_filters.push(name.to_string());
+        }
+    }
+
     /// Set keyword search filter
     pub fn set_keyword(&mut self, keyword: &str) {
         let keyword = keyword.trim();

@@ -616,6 +616,53 @@ impl AppState {
         self.reload_items();
     }
 
+    /// The categories the arrow keys step through: "all", then every visible
+    /// type filter in the order the user arranged them in settings.
+    ///
+    /// Follows `type_filter_config` rather than the built-in list, because
+    /// which buttons are shown and in what order is the user's choice, and a
+    /// cycle that disagreed with the bar it is cycling would be baffling.
+    fn category_cycle(&self) -> Vec<Option<&str>> {
+        let mut cycle: Vec<Option<&str>> = vec![None];
+        cycle.extend(
+            self.settings
+                .type_filter_config
+                .iter()
+                .filter(|entry| entry.visible)
+                .map(|entry| Some(entry.key.as_str())),
+        );
+        cycle
+    }
+
+    /// Step to the next or previous category and reload.
+    ///
+    /// Wraps: the strip is short and circular, so one press left from "all"
+    /// should reach the last category rather than doing nothing.
+    ///
+    /// A multi-type selection built by clicking has no single position in the
+    /// cycle, so stepping from it starts over from "all" — arrow keys choose
+    /// one category, the mouse still combines several.
+    pub fn cycle_type_filter(&mut self, delta: isize) {
+        let cycle = self.category_cycle();
+        if cycle.len() < 2 {
+            return;
+        }
+
+        let active = self.filters.active_types();
+        let current = match active {
+            [only] => cycle.iter().position(|slot| *slot == Some(only.as_str())).unwrap_or(0),
+            _ => 0,
+        };
+
+        let len = cycle.len() as isize;
+        let next = (((current as isize + delta) % len) + len) % len;
+        let chosen = cycle[next as usize].map(|key| key.to_string());
+
+        self.filters.set_single_type(chosen.as_deref());
+        self.selected_ids.clear();
+        self.reload_items();
+    }
+
     /// Toggle favorites-only filter and reload visible items.
     pub fn toggle_favorites_filter(&mut self) {
         self.filters.toggle_favorites_only();

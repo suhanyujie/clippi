@@ -153,6 +153,7 @@ impl Render for SearchBox {
                     .on_key_down({
                         let list = self.list_view.clone();
                         let app_state = self.state.clone();
+                        let input_for_keys = self.input.clone();
                         move |ev: &KeyDownEvent, window, cx| {
                             let key = ev.keystroke.key.as_str();
                             let ctrl = primary_modifier_pressed(ev.keystroke.modifiers);
@@ -172,6 +173,28 @@ impl Render for SearchBox {
                                         list.update(cx, |list, cx| {
                                             list.select_next(gpui::ScrollStrategy::Bottom, cx);
                                         });
+                                        cx.stop_propagation();
+                                        return;
+                                    }
+                                    // --- left/right — step through the category
+                                    // strip above the list.
+                                    //
+                                    // Only while the box is empty. Once there is
+                                    // something typed these keys belong to the
+                                    // text cursor, and taking them would make it
+                                    // impossible to go back and fix a typo. An
+                                    // empty box is also exactly the state the
+                                    // window opens in, which is when reaching for
+                                    // a category is natural.
+                                    "left" | "right"
+                                        if input_for_keys.read(cx).value().is_empty() =>
+                                    {
+                                        let delta = if key == "left" { -1 } else { 1 };
+                                        let items = app_state.update(cx, |state, _cx| {
+                                            state.cycle_type_filter(delta);
+                                            state.visible_items()
+                                        });
+                                        list.update(cx, |list, cx| list.set_items(items, cx));
                                         cx.stop_propagation();
                                         return;
                                     }
