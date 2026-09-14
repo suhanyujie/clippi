@@ -134,7 +134,7 @@ impl RootView {
         let search_box = cx
             .new(|cx| SearchBox::new(state.clone(), list_view.clone(), theme.clone(), window, cx));
         let filter_bar =
-            cx.new(|_cx| FilterBar::new(state.clone(), list_view.clone(), theme.clone()));
+            cx.new(|cx| FilterBar::new(state.clone(), list_view.clone(), theme.clone(), cx));
         // Wire up search_box reference for Ctrl+F keyboard shortcut.
         list_view.update(cx, |list, _cx| {
             list.search_bar = Some(search_box.clone());

@@ -2507,11 +2507,11 @@ impl Render for ClipboardListView {
                         return;
                     }
 
-                    // --- Cmd+left/right — switch category, matching the
-                    // search box so the same keys work wherever focus is ---
-                    if ctrl && !shift && (key == "left" || key == "right") {
+                    // --- Cmd+[ / Cmd+] — switch category, matching the search
+                    // box so the same keys work wherever focus is ---
+                    if ctrl && !shift && (key == "[" || key == "]") {
                         this.dismiss_all_panels(cx);
-                        let delta = if key == "left" { -1 } else { 1 };
+                        let delta = if key == "[" { -1 } else { 1 };
                         let items = this.state.update(cx, |state, _cx| {
                             state.cycle_type_filter(delta);
                             state.visible_items()

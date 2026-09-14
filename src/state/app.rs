@@ -657,10 +657,23 @@ impl AppState {
         let len = cycle.len() as isize;
         let next = (((current as isize + delta) % len) + len) % len;
         let chosen = cycle[next as usize].map(|key| key.to_string());
+        // Read what is needed before the borrow of `self.settings` ends.
+        let total = cycle.len();
 
         self.filters.set_single_type(chosen.as_deref());
         self.selected_ids.clear();
         self.reload_items();
+
+        // Which category this landed on, and whether it has anything in it. An
+        // empty category looks exactly like a key that did nothing.
+        log::info!(
+            "category {} -> {} of {} ({}), {} item(s)",
+            current,
+            next,
+            total,
+            chosen.as_deref().unwrap_or("all"),
+            self.items.len(),
+        );
     }
 
     /// Toggle favorites-only filter and reload visible items.

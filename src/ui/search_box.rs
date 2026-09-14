@@ -201,7 +201,8 @@ impl Render for SearchBox {
                                     // impossible to go back and fix a typo. An
                                     // empty box is the state the window opens in,
                                     // which is when reaching for a category is
-                                    // natural; Cmd+arrow below covers the rest.
+                                    // natural; Cmd+[ and Cmd+] below cover the
+                                    // rest.
                                     "left" | "right"
                                         if input_for_keys.read(cx).value().is_empty() =>
                                     {
@@ -253,20 +254,19 @@ impl Render for SearchBox {
                                     cx.stop_propagation();
                                 }
                                 // Ctrl+D — toggle favorite
-                                // Cmd+left/right — switch category with text in
+                                // Cmd+[ / Cmd+] — switch category with text in
                                 // the box.
                                 //
-                                // The cost is Home/End, which Cmd+arrow means in
-                                // a text field. In a one-line search box that is
-                                // a few presses of the bare arrow keys; being
-                                // able to change category without clearing the
-                                // query is worth more. Cmd+[ and Cmd+] are free
-                                // if that trade ever looks wrong.
-                                (true, false, "left") => {
+                                // Not Cmd+arrow: that is Home/End in a text
+                                // field, so the input has a claim on it and the
+                                // two were competing. Brackets are the
+                                // back/forward convention and nothing else here
+                                // wants them.
+                                (true, false, "[") => {
                                     cycle_category(&app_state, &list, -1, cx);
                                     cx.stop_propagation();
                                 }
-                                (true, false, "right") => {
+                                (true, false, "]") => {
                                     cycle_category(&app_state, &list, 1, cx);
                                     cx.stop_propagation();
                                 }

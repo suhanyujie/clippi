@@ -86,6 +86,7 @@ pub struct FilterBar {
     tag_panel_open: bool,
     filter_config_open: bool,
     theme: ClippiTheme,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl FilterBar {
@@ -93,13 +94,22 @@ impl FilterBar {
         state: Entity<AppState>,
         list_view: Entity<ClipboardListView>,
         theme: ClippiTheme,
+        cx: &mut Context<Self>,
     ) -> Self {
+        // Every button here is drawn from `state.filters`, so the bar has to
+        // redraw whenever those change. Without this it only redrew when it was
+        // told to by its own click handler — so a filter changed from anywhere
+        // else (the keyboard, for one) moved the list while the highlight stayed
+        // where it was, which reads as the keys having stopped working.
+        let _subscriptions = vec![cx.observe(&state, |_bar, _state, cx| cx.notify())];
+
         Self {
             state,
             list_view,
             tag_panel_open: false,
             filter_config_open: false,
             theme,
+            _subscriptions,
         }
     }
 
@@ -273,6 +283,10 @@ impl Render for FilterBar {
                                                 Self::apply_type_filter(
                                                     &state, &list_view, key, cx,
                                                 );
+                                                // Redundant now that the bar
+                                                // observes the state; harmless,
+                                                // and kept so a click still
+                                                // redraws if that ever changes.
                                                 this.update(cx, |_bar, cx| cx.notify());
                                             },
                                         )
