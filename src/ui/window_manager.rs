@@ -409,6 +409,15 @@ pub struct WindowManager {
     auto_hide: bool,
     visible: bool,
     suppress_until: Option<Instant>,
+    #[cfg(target_os = "macos")]
+    _main_activation_probe: Option<Task<()>>,
+    /// Set while the panel is up but the system refused it the keyboard because
+    /// another application holds secure keyboard entry. Auto-hide is suspended
+    /// for as long as it lasts: the usual "we are not frontmost, so the user
+    /// clicked away" reasoning is wrong here — we were never allowed to be
+    /// frontmost, and hiding leaves a hotkey that visibly does nothing.
+    #[cfg(target_os = "macos")]
+    secure_input_block: bool,
 
     // --- Platform resources ---
     hotkey: Option<Box<dyn HotkeyListener>>,
@@ -617,6 +626,10 @@ impl WindowManager {
             auto_hide: settings.auto_hide,
             visible: !settings.silent_start,
             suppress_until: Some(Instant::now() + Duration::from_millis(SUPPRESS_DURATION_MS)),
+            #[cfg(target_os = "macos")]
+            _main_activation_probe: None,
+            #[cfg(target_os = "macos")]
+            secure_input_block: false,
             hotkey: None,
             win_v_takeover_status: WinVTakeoverStatus::Disabled,
             #[cfg(target_os = "windows")]
@@ -1789,6 +1802,34 @@ impl WindowManager {
             return;
         }
 
+        #[cfg(target_os = "macos")]
+        if self.secure_input_block {
+            if crate::platform::secure_input::is_enabled() {
+                // Still blocked. Leaving the panel up is the whole point.
+                return;
+            }
+            // The field lost focus, so the keyboard is available again. Drop
+            // back to the normal rules; if the user has moved on, the next line
+            // hides the panel as it always would.
+            self.secure_input_block = false;
+            self.set_macos_window_floating(false);
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let (app_active, window_key, front) = self.activation_snapshot();
+            let since_show = self
+                .suppress_until
+                .map(|u| {
+                    let started = u - Duration::from_millis(SUPPRESS_DURATION_MS);
+                    Instant::now().saturating_duration_since(started).as_millis()
+                })
+                .unwrap_or(0);
+            log::info!(
+                "auto-hide: {since_show}ms after show, front={front}, app_active={app_active}, window_key={window_key}"
+            );
+        }
+
         self.hide(cx);
     }
 
@@ -2600,6 +2641,163 @@ impl WindowManager {
 
     /// Check if our own window is the current foreground window.
     /// Uses direct HWND comparison to avoid dependence on window title.
+    /// Raise the panel above other applications' windows, or put it back.
+    ///
+    /// Pinning already uses the floating level; this borrows it for the case
+    /// where we cannot activate, so the panel is at least visible and usable
+    /// with the mouse rather than stranded behind the window it was summoned
+    /// over.
+    #[cfg(target_os = "macos")]
+    fn set_macos_window_floating(&self, floating: bool) {
+        if self.ns_window == 0 {
+            return;
+        }
+        let level = if floating || self.pinned {
+            objc2_app_kit::NSFloatingWindowLevel
+        } else {
+            objc2_app_kit::NSNormalWindowLevel
+        };
+        // SAFETY: our own NSWindow pointer, main thread only.
+        unsafe {
+            let window = &*(self.ns_window as *const objc2_app_kit::NSWindow);
+            window.setLevel(level);
+        }
+    }
+
+    /// Bring the panel forward and give it the keyboard, one run-loop turn from now.
+    ///
+    /// Three things have to be right, and each was wrong before:
+    ///
+    /// 1. **Off the update.** AppKit delivers `applicationDidBecomeActive` and
+    ///    `windowDidBecomeKey` synchronously from these calls, and GPUI re-enters
+    ///    to handle them — finding its `App` RefCell still held by the update we
+    ///    are in, logging "already borrowed", and dropping the event. The Windows
+    ///    branch of `show_and_focus` already defers for exactly this reason.
+    /// 2. **Window first, application second.** `activateIgnoringOtherApps:` has
+    ///    nothing to bring forward while the application has no window on screen,
+    ///    so ordering the window front afterwards left us behind the app we were
+    ///    summoned over.
+    /// 3. **A request that still works.** `activateIgnoringOtherApps:` — what
+    ///    `cx.activate` calls — is deprecated since macOS 14 and documented to
+    ///    have no effect; what remains is cooperative activation, which the
+    ///    frontmost application may decline, and Chromium-based browsers do.
+    ///    `NSRunningApplication.activate(options:)` is the supported request and
+    ///    succeeds where the old call is ignored, so fall back to it rather than
+    ///    leave the panel on screen without the keyboard.
+    #[cfg(target_os = "macos")]
+    fn activate_main_window(&mut self, path: &'static str, cx: &mut Context<Self>) {
+        self._main_activation_probe = Some(cx.spawn(async move |weak_self, cx| {
+            // Let the update that scheduled this release GPUI's borrow.
+            Timer::after(Duration::from_millis(1)).await;
+            let Some(this) = weak_self.upgrade() else {
+                return;
+            };
+            let requested = this
+                .update(cx, |wm, cx| {
+                    if !wm.visible {
+                        return false;
+                    }
+                    wm.activate_macos_window();
+                    cx.activate(true);
+                    true
+                })
+                .unwrap_or(false);
+            if !requested {
+                return;
+            }
+
+            // Activation is asynchronous; ask again once it has had a turn.
+            Timer::after(Duration::from_millis(40)).await;
+            let Some(this) = weak_self.upgrade() else {
+                return;
+            };
+            let retried = this
+                .update(cx, |wm, _cx| {
+                    if !wm.visible {
+                        return false;
+                    }
+                    let (active, key, front) = wm.activation_snapshot();
+                    if active && key {
+                        return false;
+                    }
+                    log::info!(
+                        "show[{path}]: cooperative activation declined by {front} (app_active={active}, window_key={key}); asking again as NSRunningApplication"
+                    );
+                    let took = objc2_app_kit::NSRunningApplication::currentApplication()
+                        .activateWithOptions(
+                            objc2_app_kit::NSApplicationActivationOptions::ActivateAllWindows,
+                        );
+                    if !took {
+                        log::warn!("show[{path}]: NSRunningApplication.activate returned false");
+                    }
+                    wm.activate_macos_window();
+                    true
+                })
+                .unwrap_or(false);
+
+            // Report the outcome either way — a panel on screen without the
+            // keyboard is the failure this routine exists to prevent.
+            Timer::after(Duration::from_millis(60)).await;
+            let Some(this) = weak_self.upgrade() else {
+                return;
+            };
+            let _ = this.update(cx, |wm, _cx: &mut Context<Self>| {
+                if !wm.visible {
+                    return;
+                }
+                let (active, key, front) = wm.activation_snapshot();
+                if active && key {
+                    log::info!(
+                        "show[{path}]: focused{}",
+                        if retried { " (after retry)" } else { "" }
+                    );
+                    return;
+                }
+
+                if crate::platform::secure_input::is_enabled() {
+                    // Not a defect to fix: the system is protecting a password
+                    // field. Say so, keep the panel up and above the window it
+                    // was summoned over, and let the mouse do the work.
+                    log::info!(
+                        "show[{path}]: {front} holds secure keyboard entry; keeping the panel up for mouse use"
+                    );
+                    wm.secure_input_block = true;
+                    wm.set_macos_window_floating(true);
+                    wm.show_warning_toast(
+                        crate::core::i18n_keys::I18nKey::SecureInputBlocked.fmt(&[&front]),
+                        _cx,
+                    );
+                } else {
+                    log::warn!(
+                        "show[{path}]: still not focused (app_active={active}, window_key={key}, front={front})"
+                    );
+                }
+            });
+        }));
+    }
+
+    /// Snapshot of what macOS thinks about our activation, for diagnosis.
+    /// `(app_is_active, window_is_key, frontmost_app_name)`
+    #[cfg(target_os = "macos")]
+    fn activation_snapshot(&self) -> (bool, bool, String) {
+        let app = objc2_app_kit::NSApplication::sharedApplication(
+            objc2::MainThreadMarker::new().expect("main thread"),
+        );
+        let app_active = app.isActive();
+        let window_key = if self.ns_window == 0 {
+            false
+        } else {
+            // SAFETY: our own NSWindow pointer, main thread only.
+            unsafe { (*(self.ns_window as *const objc2_app_kit::NSWindow)).isKeyWindow() }
+        };
+        let front = objc2_app_kit::NSWorkspace::sharedWorkspace()
+            .frontmostApplication()
+            .and_then(|a| a.localizedName())
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "?".into());
+        (app_active, window_key, front)
+    }
+
     fn is_self_foreground(&self) -> bool {
         #[cfg(target_os = "windows")]
         {
@@ -2789,8 +2987,7 @@ impl WindowManager {
             }
             #[cfg(target_os = "macos")]
             {
-                cx.activate(true);
-                self.activate_macos_window();
+                self.activate_main_window("reshow", cx);
             }
             cx.notify();
             return;
@@ -2856,8 +3053,7 @@ impl WindowManager {
                 if let Some((x, y)) = self.calculate_position() {
                     self.position_macos_window(x, y);
                 }
-                cx.activate(true);
-                self.activate_macos_window();
+                self.activate_main_window("direct", cx);
             }
         }
 
@@ -3304,6 +3500,10 @@ impl WindowManager {
             // front after this hide (doc §4.1).
             self._main_restore_task = None;
             self.capture_window_geometry(cx);
+            if self.secure_input_block {
+                self.secure_input_block = false;
+                self.set_macos_window_floating(false);
+            }
             self.hide_macos_window();
             if MACOS_SURFACE_COMPACTION_ENABLED && !self.macos_compaction_disabled {
                 self.compact_main_macos_window(cx);
@@ -4184,8 +4384,7 @@ impl WindowManager {
                     // Keep the existing activation semantics of `show_and_focus`
                     // (doc §3.3): the app must be active before ordering front,
                     // otherwise keyboard events keep going to the previous app.
-                    cx.activate(true);
-                    wm.activate_macos_window();
+                    wm.activate_main_window("restore", cx);
                     true
                 })
                 .unwrap_or(false);

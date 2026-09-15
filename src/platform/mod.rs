@@ -7,6 +7,7 @@ pub mod hotkey;
 pub mod monitor;
 pub mod paste;
 pub mod remote_path;
+pub mod secure_input;
 pub mod source;
 pub mod text_input;
 pub mod tray;

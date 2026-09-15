@@ -438,6 +438,7 @@ define_i18n! {
     FilterConfigTypes:      ("类型", "Types"),
     FilterConfigTags:       ("标签", "Tags"),
     FilterConfigNoTags:     ("还没有标签", "No tags yet"),
+    SecureInputBlocked:     ("{0} 正在使用安全键盘输入，面板取不到键盘。可以用鼠标选择，或点一下该程序的其他位置后重试。", "{0} has secure keyboard entry on, so the panel cannot take the keyboard. Pick with the mouse, or click elsewhere in that app and try again."),
     TagTooltipToggleMode:   ("切换筛选模式", "Toggle Filter Mode"),
     TagTooltipClear:        ("清空筛选", "Clear Filters"),
     SearchPlaceholderFull:  ("搜索剪贴板...", "Search clipboard..."),
