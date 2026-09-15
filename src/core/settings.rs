@@ -154,6 +154,18 @@ pub struct AppSettings {
     pub language: String, // "zh_CN" or "en", empty = follow system
     #[serde(default)]
     pub pinned_tag_ids: Vec<i64>, // tag IDs pinned to sidebar
+    /// Tag IDs shown as buttons in the category strip above the list.
+    ///
+    /// Separate from `pinned_tag_ids` on purpose: the sidebar and the strip are
+    /// two places a tag can live, and one list for both meant pinning a tag for
+    /// the strip also parked a copy of it in the margin beside the panel.
+    /// Seeded from the sidebar pins once, so nobody loses what they had.
+    #[serde(default)]
+    pub strip_tag_ids: Vec<i64>,
+    /// Set once `strip_tag_ids` has been seeded from `pinned_tag_ids`, so that
+    /// clearing the strip does not look like "never migrated" and refill it.
+    #[serde(default)]
+    pub strip_tag_ids_migrated: bool,
     #[serde(default = "default_ocr_enabled")]
     pub ocr_enabled: bool, // image OCR auto-detection toggle
     #[serde(default = "default_qr_enabled")]
@@ -314,6 +326,8 @@ impl Default for AppSettings {
             clipboard_app_blacklist: Vec::new(),
             language: String::new(),
             pinned_tag_ids: Vec::new(),
+            strip_tag_ids: Vec::new(),
+            strip_tag_ids_migrated: false,
             ocr_enabled: false,
             qr_enabled: true,
             hide_taskbar_icon: false,
@@ -374,7 +388,25 @@ impl AppSettings {
         }
         // --- Migrate type filter config (seed from BUILTIN_TYPE_KEYS) ---
         settings.migrate_type_filter_config();
+        // --- Seed the category strip from the sidebar pins, once ---
+        if settings.migrate_strip_tag_ids() {
+            settings.save();
+        }
         settings
+    }
+
+    /// One-time migration: the category strip used to read `pinned_tag_ids`,
+    /// the sidebar's list. Carry those over so an existing strip survives the
+    /// split, then never touch it again — an empty strip is a valid choice.
+    fn migrate_strip_tag_ids(&mut self) -> bool {
+        if self.strip_tag_ids_migrated {
+            return false;
+        }
+        self.strip_tag_ids_migrated = true;
+        if self.strip_tag_ids.is_empty() && !self.pinned_tag_ids.is_empty() {
+            self.strip_tag_ids = self.pinned_tag_ids.clone();
+        }
+        true
     }
 
     /// One-time migration: old `sync_enabled` + `sync_data_dir` → `sync_backends` entry.
@@ -817,6 +849,18 @@ pub fn merge_configs(source: &AppSettings, target: &AppSettings, new_db_path: &s
     }
     merged.pinned_tag_ids = pinned;
 
+    // ── strip_tag_ids: set union, on the same best-effort terms ──
+    let mut strip = source.strip_tag_ids.clone();
+    for id in &target.strip_tag_ids {
+        if !strip.contains(id) {
+            strip.push(*id);
+        }
+    }
+    merged.strip_tag_ids = strip;
+    // Neither side should be re-seeded from the sidebar after a merge.
+    merged.strip_tag_ids_migrated =
+        source.strip_tag_ids_migrated || target.strip_tag_ids_migrated;
+
     // ── paste_shortcuts: merge by app_name (source takes precedence) ──
     let source_apps: Vec<&str> = source
         .paste_shortcuts
@@ -1058,6 +1102,42 @@ mod tests {
         assert!(merged.hotkey_blacklist.contains(&"app1".into()));
         assert!(merged.hotkey_blacklist.contains(&"app2".into()));
         assert!(merged.hotkey_blacklist.contains(&"app3".into()));
+    }
+
+    #[test]
+    fn strip_tags_are_seeded_from_the_sidebar_pins_once() {
+        let mut s = AppSettings {
+            pinned_tag_ids: vec![3, 7],
+            ..Default::default()
+        };
+
+        assert!(s.migrate_strip_tag_ids(), "first run migrates");
+        assert_eq!(s.strip_tag_ids, [3, 7], "an existing strip survives the split");
+        assert_eq!(s.pinned_tag_ids, [3, 7], "and the sidebar keeps its own");
+    }
+
+    #[test]
+    fn clearing_the_strip_is_not_undone_by_the_migration() {
+        // Without the flag, an empty strip looks like "never migrated" and the
+        // sidebar pins come back on every launch.
+        let mut s = AppSettings {
+            pinned_tag_ids: vec![3],
+            ..Default::default()
+        };
+        s.migrate_strip_tag_ids();
+        s.strip_tag_ids.clear();
+
+        assert!(!s.migrate_strip_tag_ids(), "nothing left to migrate");
+        assert!(s.strip_tag_ids.is_empty(), "an empty strip is a valid choice");
+    }
+
+    #[test]
+    fn a_fresh_install_migrates_to_an_empty_strip() {
+        let mut s = AppSettings::default();
+
+        assert!(s.migrate_strip_tag_ids());
+        assert!(s.strip_tag_ids.is_empty());
+        assert!(s.strip_tag_ids_migrated);
     }
 
     #[test]

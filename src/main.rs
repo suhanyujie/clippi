@@ -497,7 +497,7 @@ fn main() {
                     let s = state.read(cx);
                     let has_tag = s
                         .settings
-                        .pinned_tag_ids
+                        .strip_tag_ids
                         .iter()
                         .any(|&id| s.tags.iter().any(|t| t.id == id));
                     let has_type = !s.settings.type_filter_config.is_empty();

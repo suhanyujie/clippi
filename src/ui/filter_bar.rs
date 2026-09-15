@@ -195,7 +195,7 @@ impl Render for FilterBar {
         // they share the same width budget.
         let pinned_tags: Vec<crate::core::types::TagInfo> = state_snapshot
             .settings
-            .pinned_tag_ids
+            .strip_tag_ids
             .iter()
             .filter_map(|id| state_snapshot.tags.iter().find(|t| t.id == *id).cloned())
             .collect();

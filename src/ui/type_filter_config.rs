@@ -122,20 +122,22 @@ impl TypeFilterConfigPanel {
         self.filter_bar.update(cx, |_b, cx| cx.notify());
     }
 
-    /// Pin or unpin a tag — this is what adds a tag button to the strip or
-    /// takes it away. Deliberately the same `toggle_pinned_tag` the sidebar
-    /// calls: one action, one behaviour, whichever way you reach it.
-    fn toggle_pinned(&self, tag_id: i64, cx: &mut Context<Self>) {
+    /// Put a tag on the strip, or take it off.
+    ///
+    /// The sidebar keeps its own pins. A tag can sit in either place, both or
+    /// neither: one list for both meant that adding a tag to the strip also
+    /// parked a copy of it in the margin beside the panel.
+    fn toggle_strip(&self, tag_id: i64, cx: &mut Context<Self>) {
         self.state.update(cx, |s, _cx| {
-            s.toggle_pinned_tag(tag_id);
+            s.toggle_strip_tag(tag_id);
         });
         self.filter_bar.update(cx, |_b, cx| cx.notify());
         cx.notify();
     }
 
-    fn move_pinned(&self, tag_id: i64, delta: isize, cx: &mut Context<Self>) {
+    fn move_strip(&self, tag_id: i64, delta: isize, cx: &mut Context<Self>) {
         self.state.update(cx, |s, _cx| {
-            s.move_pinned_tag(tag_id, delta);
+            s.move_strip_tag(tag_id, delta);
         });
         self.filter_bar.update(cx, |_b, cx| cx.notify());
         cx.notify();
@@ -160,20 +162,20 @@ impl Render for TypeFilterConfigPanel {
         let app_state = self.state.read(cx);
         let theme = ClippiTheme::from_setting(&app_state.settings.theme, Some(window.appearance()));
         let config = app_state.settings.type_filter_config.clone();
-        let pinned_ids = app_state.settings.pinned_tag_ids.clone();
+        let strip_ids = app_state.settings.strip_tag_ids.clone();
         let tags = app_state.tags.clone();
         let _ = app_state;
 
-        // Pinned tags first, in the order they sit in the strip, then the rest —
-        // the top of the section mirrors what the strip actually shows.
-        let mut tag_rows: Vec<_> = pinned_ids
+        // Tags already on the strip first, in the order they sit there, then
+        // the rest — the top of the section mirrors what the strip shows.
+        let mut tag_rows: Vec<_> = strip_ids
             .iter()
             .filter_map(|id| tags.iter().find(|t| t.id == *id).cloned())
             .collect();
-        let pinned_count = tag_rows.len();
+        let strip_count = tag_rows.len();
         tag_rows.extend(
             tags.iter()
-                .filter(|t| !pinned_ids.contains(&t.id))
+                .filter(|t| !strip_ids.contains(&t.id))
                 .cloned(),
         );
 
@@ -374,9 +376,9 @@ impl Render for TypeFilterConfigPanel {
                         .overflow_y_scrollbar()
                         .children(tag_rows.iter().enumerate().map(|(i, tag)| {
                             let tag_id = tag.id;
-                            let pinned = i < pinned_count;
+                            let on_strip = i < strip_count;
                             let is_first = i == 0;
-                            let is_last = i + 1 >= pinned_count;
+                            let is_last = i + 1 >= strip_count;
 
                             div()
                                 .flex()
@@ -391,17 +393,17 @@ impl Render for TypeFilterConfigPanel {
                                     let this = this_entity.clone();
                                     move |_ev, _window, cx| {
                                         cx.stop_propagation();
-                                        this.update(cx, |panel, cx| panel.toggle_pinned(tag_id, cx));
+                                        this.update(cx, |panel, cx| panel.toggle_strip(tag_id, cx));
                                     }
                                 })
-                                // Checkbox — pinned means "on the strip"
+                                // Checkbox — ticked means "on the strip"
                                 .child(
                                     div()
                                         .text_size(px(12.))
                                         .font_family("iconfont")
-                                        .text_color(if pinned { accent } else { text_3 })
+                                        .text_color(if on_strip { accent } else { text_3 })
                                         .flex_shrink_0()
-                                        .child(if pinned { "\u{e61f}" } else { "\u{e831}" }),
+                                        .child(if on_strip { "\u{e61f}" } else { "\u{e831}" }),
                                 )
                                 // The tag's own colour, the same dot the strip draws
                                 .child(
@@ -412,7 +414,7 @@ impl Render for TypeFilterConfigPanel {
                                         .rounded_full()
                                         .flex_shrink_0()
                                         .bg(parse_tag_color(&tag.color))
-                                        .when(!pinned, |el| el.opacity(0.4)),
+                                        .when(!on_strip, |el| el.opacity(0.4)),
                                 )
                                 .child(
                                     div()
@@ -421,15 +423,15 @@ impl Render for TypeFilterConfigPanel {
                                         .flex_1()
                                         .min_w(px(0.))
                                         .overflow_hidden()
-                                        .text_color(if pinned { text_1 } else { text_3 })
+                                        .text_color(if on_strip { text_1 } else { text_3 })
                                         .child(tag.name.clone()),
                                 )
-                                // Reordering only means something for a tag that
-                                // is on the strip; an unpinned one has no place
-                                // in it to move.
+                                // Reordering only means something for a tag
+                                // that is on the strip; one that is not has no
+                                // place in it to move.
                                 .child(arrow_button(
                                     "\u{e665}",
-                                    !pinned || is_first,
+                                    !on_strip || is_first,
                                     arrow_bg,
                                     arrow_hover,
                                     text_2,
@@ -437,14 +439,14 @@ impl Render for TypeFilterConfigPanel {
                                         let this = this_entity.clone();
                                         move |cx: &mut App| {
                                             this.update(cx, |panel, cx| {
-                                                panel.move_pinned(tag_id, -1, cx)
+                                                panel.move_strip(tag_id, -1, cx)
                                             });
                                         }
                                     },
                                 ))
                                 .child(div().ml(px(2.)).child(arrow_button(
                                     "\u{e666}",
-                                    !pinned || is_last,
+                                    !on_strip || is_last,
                                     arrow_bg,
                                     arrow_hover,
                                     text_2,
@@ -452,7 +454,7 @@ impl Render for TypeFilterConfigPanel {
                                         let this = this_entity.clone();
                                         move |cx: &mut App| {
                                             this.update(cx, |panel, cx| {
-                                                panel.move_pinned(tag_id, 1, cx)
+                                                panel.move_strip(tag_id, 1, cx)
                                             });
                                         }
                                     },

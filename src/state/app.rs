@@ -611,7 +611,7 @@ impl AppState {
     /// The categories the arrow keys step through: "all", every visible type
     /// filter in the order the user arranged them, then every tag they pinned.
     ///
-    /// Follows `type_filter_config` and `pinned_tag_ids` rather than any list of
+    /// Follows `type_filter_config` and `strip_tag_ids` rather than any list of
     /// its own, because what the strip shows is the user's choice and a cycle
     /// that disagreed with the strip it cycles would be baffling.
     pub fn category_cycle(&self) -> Vec<Category> {
@@ -623,11 +623,11 @@ impl AppState {
                 .filter(|entry| entry.visible)
                 .map(|entry| Category::Type(entry.key.clone())),
         );
-        // Pinned tags, in the order they were pinned, skipping any that have
+        // Strip tags, in the order they were added, skipping any that have
         // since been deleted.
         cycle.extend(
             self.settings
-                .pinned_tag_ids
+                .strip_tag_ids
                 .iter()
                 .filter(|id| self.tags.iter().any(|t| t.id == **id))
                 .map(|id| Category::Tag(*id)),
@@ -771,37 +771,56 @@ impl AppState {
         self.settings.save();
     }
 
-    /// Move a pinned tag one position along the category strip.
+    /// Put a tag on the category strip, or take it off.
+    ///
+    /// Distinct from the sidebar's pins: a tag can sit in either place, both, or
+    /// neither, and saying "put this on the strip" should not also park a copy
+    /// of it in the margin beside the panel.
+    pub fn toggle_strip_tag(&mut self, tag_id: i64) {
+        if let Some(pos) = self
+            .settings
+            .strip_tag_ids
+            .iter()
+            .position(|&id| id == tag_id)
+        {
+            self.settings.strip_tag_ids.remove(pos);
+        } else {
+            self.settings.strip_tag_ids.push(tag_id);
+        }
+        self.settings.save();
+    }
+
+    /// Move a tag one position along the category strip.
     ///
     /// Swaps with the nearest neighbour that still exists rather than the
-    /// literal neighbour: `pinned_tag_ids` can hold ids for tags this device
-    /// doesn't have — config sync merges the pinned list across devices, where
-    /// ids differ — and the strip skips those. Swapping with one would read as
-    /// a key that did nothing.
-    pub fn move_pinned_tag(&mut self, tag_id: i64, delta: isize) {
+    /// literal neighbour: `strip_tag_ids` can hold ids for tags this device
+    /// doesn't have — config sync merges the list across devices, where ids
+    /// differ — and the strip skips those. Swapping with one would read as a
+    /// key that did nothing.
+    pub fn move_strip_tag(&mut self, tag_id: i64, delta: isize) {
         let Some(from) = self
             .settings
-            .pinned_tag_ids
+            .strip_tag_ids
             .iter()
             .position(|&id| id == tag_id)
         else {
             return;
         };
 
-        let len = self.settings.pinned_tag_ids.len() as isize;
+        let len = self.settings.strip_tag_ids.len() as isize;
         let mut to = from as isize;
         loop {
             to += delta;
             if to < 0 || to >= len {
                 return;
             }
-            let candidate = self.settings.pinned_tag_ids[to as usize];
+            let candidate = self.settings.strip_tag_ids[to as usize];
             if self.tags.iter().any(|t| t.id == candidate) {
                 break;
             }
         }
 
-        self.settings.pinned_tag_ids.swap(from, to as usize);
+        self.settings.strip_tag_ids.swap(from, to as usize);
         self.settings.save();
     }
 
@@ -884,8 +903,10 @@ impl AppState {
                 }
                 self.sync_dirty.store(true, Ordering::SeqCst);
                 self.filters.tag_ids.retain(|&id| id != tag_id);
-                // Remove any stale pinned sidebar entry for the deleted tag.
+                // Remove any stale entry for the deleted tag from both places a
+                // tag can live.
                 self.settings.pinned_tag_ids.retain(|&id| id != tag_id);
+                self.settings.strip_tag_ids.retain(|&id| id != tag_id);
                 self.settings.save();
                 self.reload_tags();
                 self.reload_items();
@@ -2933,13 +2954,13 @@ mod tests {
             TypeFilterEntry { key: "link".into(), visible: false },
             TypeFilterEntry { key: "file".into(), visible: true },
         ];
-        state.settings.pinned_tag_ids = vec![5];
+        state.settings.strip_tag_ids = vec![5];
         state.tags = vec![tag(5, "work")];
         state
     }
 
     #[test]
-    fn cycle_shows_all_visible_types_and_pinned_tags() {
+    fn cycle_shows_all_visible_types_and_strip_tags() {
         let state = strip_state();
 
         assert_eq!(
@@ -2955,9 +2976,9 @@ mod tests {
     }
 
     #[test]
-    fn cycle_skips_pinned_tags_that_no_longer_exist() {
+    fn cycle_skips_strip_tags_that_no_longer_exist() {
         let mut state = strip_state();
-        state.settings.pinned_tag_ids = vec![5, 99];
+        state.settings.strip_tag_ids = vec![5, 99];
 
         assert_eq!(
             state.category_cycle(),
@@ -2983,7 +3004,7 @@ mod tests {
 
         state.cycle_type_filter(1);
         assert!(state.filters.active_types().is_empty());
-        assert_eq!(state.filters.tag_ids, [5], "last position is the pinned tag");
+        assert_eq!(state.filters.tag_ids, [5], "last position is the strip tag");
 
         state.cycle_type_filter(1);
         assert!(state.filters.active_types().is_empty());
@@ -3034,6 +3055,44 @@ mod tests {
             "a combination reads as All, so one step forward lands on the first type"
         );
         assert!(state.filters.tag_ids.is_empty());
+    }
+
+    #[test]
+    fn the_strip_and_the_sidebar_keep_separate_lists() {
+        // One list for both meant that adding a tag to the strip also parked a
+        // copy of it in the margin beside the panel.
+        let mut state = strip_state();
+        state.settings.strip_tag_ids = Vec::new();
+        state.settings.pinned_tag_ids = Vec::new();
+
+        state.toggle_strip_tag(5);
+
+        assert_eq!(state.settings.strip_tag_ids, [5]);
+        assert!(
+            state.settings.pinned_tag_ids.is_empty(),
+            "the sidebar was not asked for anything"
+        );
+        assert_eq!(state.category_cycle().last(), Some(&Category::Tag(5)));
+
+        state.toggle_pinned_tag(5);
+        assert_eq!(state.settings.pinned_tag_ids, [5]);
+        assert_eq!(
+            state.settings.strip_tag_ids,
+            [5],
+            "and the strip is not disturbed by the sidebar either"
+        );
+    }
+
+    #[test]
+    fn the_cycle_ignores_tags_that_are_only_pinned_to_the_sidebar() {
+        let mut state = strip_state();
+        state.settings.strip_tag_ids = Vec::new();
+        state.settings.pinned_tag_ids = vec![5];
+
+        assert!(
+            !state.category_cycle().contains(&Category::Tag(5)),
+            "a sidebar pin is not a strip button"
+        );
     }
 
     #[test]
@@ -3093,62 +3152,62 @@ mod tests {
     }
 
     #[test]
-    fn moving_a_pinned_tag_changes_its_place_in_the_strip() {
+    fn moving_a_strip_tag_changes_its_place() {
         let mut state = strip_state();
-        state.settings.pinned_tag_ids = vec![5, 6];
+        state.settings.strip_tag_ids = vec![5, 6];
         state.tags = vec![tag(5, "work"), tag(6, "home")];
 
-        state.move_pinned_tag(6, -1);
+        state.move_strip_tag(6, -1);
 
-        assert_eq!(state.settings.pinned_tag_ids, [6, 5]);
+        assert_eq!(state.settings.strip_tag_ids, [6, 5]);
         assert_eq!(
             state.category_cycle().last(),
             Some(&Category::Tag(5)),
-            "the cycle follows the pinned order"
+            "the cycle follows the strip order"
         );
     }
 
     #[test]
     fn moving_past_either_end_does_nothing() {
         let mut state = strip_state();
-        state.settings.pinned_tag_ids = vec![5, 6];
+        state.settings.strip_tag_ids = vec![5, 6];
         state.tags = vec![tag(5, "work"), tag(6, "home")];
 
-        state.move_pinned_tag(5, -1);
-        state.move_pinned_tag(6, 1);
+        state.move_strip_tag(5, -1);
+        state.move_strip_tag(6, 1);
 
-        assert_eq!(state.settings.pinned_tag_ids, [5, 6]);
+        assert_eq!(state.settings.strip_tag_ids, [5, 6]);
     }
 
     #[test]
-    fn moving_skips_pinned_ids_with_no_tag_behind_them() {
+    fn moving_skips_ids_with_no_tag_behind_them() {
         // Config sync merges pinned lists across devices, where tag ids differ,
         // so the list can hold ids this device has no tag for. The strip skips
         // them; swapping with one would look like a key that did nothing.
         let mut state = strip_state();
-        state.settings.pinned_tag_ids = vec![5, 99, 6];
+        state.settings.strip_tag_ids = vec![5, 99, 6];
         state.tags = vec![tag(5, "work"), tag(6, "home")];
 
-        state.move_pinned_tag(6, -1);
+        state.move_strip_tag(6, -1);
 
-        assert_eq!(state.settings.pinned_tag_ids, [6, 99, 5]);
+        assert_eq!(state.settings.strip_tag_ids, [6, 99, 5]);
     }
 
     #[test]
-    fn moving_a_tag_that_is_not_pinned_does_nothing() {
+    fn moving_a_tag_that_is_not_on_the_strip_does_nothing() {
         let mut state = strip_state();
-        state.settings.pinned_tag_ids = vec![5];
+        state.settings.strip_tag_ids = vec![5];
 
-        state.move_pinned_tag(6, 1);
+        state.move_strip_tag(6, 1);
 
-        assert_eq!(state.settings.pinned_tag_ids, [5]);
+        assert_eq!(state.settings.strip_tag_ids, [5]);
     }
 
     #[test]
     fn a_strip_with_nothing_to_cycle_does_nothing() {
         let (mut state, _) = test_state();
         state.settings.type_filter_config = Vec::new();
-        state.settings.pinned_tag_ids = Vec::new();
+        state.settings.strip_tag_ids = Vec::new();
         state.filters.toggle_type("image");
 
         state.cycle_type_filter(1);
@@ -4367,17 +4426,19 @@ mod tests {
         let item_id = state.db.get_by_hash(item.content_hash).unwrap().unwrap().id;
         state.db.add_item_tag(item_id, tag_id).unwrap();
 
-        // Activate the tag filter and pin the tag in the sidebar.
+        // Activate the tag filter and put the tag in both places it can live.
         state.filters.tag_ids.push(tag_id);
         state.settings.pinned_tag_ids.push(tag_id);
+        state.settings.strip_tag_ids.push(tag_id);
 
         assert!(state.delete_tag(tag_id));
 
         // Tag is gone from the reloaded tag list.
         assert!(state.tags.iter().all(|t| t.id != tag_id));
-        // Filter and pinned-sidebar entries were cleaned up.
+        // Filter, sidebar pin and strip entry were all cleaned up.
         assert!(!state.filters.tag_ids.contains(&tag_id));
         assert!(!state.settings.pinned_tag_ids.contains(&tag_id));
+        assert!(!state.settings.strip_tag_ids.contains(&tag_id));
         // The clipboard item survived; its tag association is gone.
         let item = state.db.get_by_id_with_tags(item_id).unwrap().unwrap();
         assert!(item.tags.is_empty());

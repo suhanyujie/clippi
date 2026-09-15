@@ -2184,9 +2184,9 @@ impl WindowManager {
     /// (04-spec C4).
     fn current_quick_height(&self, cx: &mut Context<Self>) -> f32 {
         let state = self.state.read(cx);
-        let pinned_tag_ids = &state.settings.pinned_tag_ids;
+        let strip_tag_ids = &state.settings.strip_tag_ids;
         let tags = &state.tags;
-        let has_tag = pinned_tag_ids
+        let has_tag = strip_tag_ids
             .iter()
             .any(|&id| tags.iter().any(|t| t.id == id));
         let has_type = !state.settings.type_filter_config.is_empty();

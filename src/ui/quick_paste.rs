@@ -747,7 +747,7 @@ impl Render for QuickPasteView {
             // Only clone tag data for pinned tags (avoid cloning all tags every frame)
             let pinned_tags: Vec<(i64, String, String)> = state
                 .settings
-                .pinned_tag_ids
+                .strip_tag_ids
                 .iter()
                 .filter_map(|&id| {
                     state
