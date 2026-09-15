@@ -75,6 +75,9 @@
   search box is empty, or `⌘[` / `⌘]` at any time
 - Pinned tags join the strip: a pinned tag appears after the type buttons and
   is included in the arrow-key cycle
+- One category at a time: exactly one strip button is selected; clicking the
+  selected one returns to "all". Clicking and the arrow keys go through the
+  same call, so they agree on where the strip is (the Quick Paste strip too)
 - Customise the strip: right-click it for a config panel — show, hide and
   reorder the content types, tick a tag to pin or unpin it, and reorder the
   pinned ones. The content types are a fixed set of eight; to add a button

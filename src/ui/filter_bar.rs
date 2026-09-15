@@ -11,6 +11,7 @@ use gpui_component::tooltip::Tooltip;
 
 use crate::core::frontend::PANEL_OFFSET_X;
 use crate::core::i18n_keys::I18nKey;
+use crate::core::filters::Category;
 use crate::state::app::AppState;
 
 use super::clipboard_list::ClipboardListView;
@@ -137,31 +138,36 @@ impl FilterBar {
         cx.notify();
     }
 
-    /// Narrow to a single pinned tag, or clear it if it was already the one.
-    ///
-    /// Clicking a tag chip in the strip behaves like clicking a type button:
-    /// it toggles. The arrow keys are the single-select path.
+    /// Narrow to one pinned tag, or back to "all" if it was already the one.
     fn apply_tag_filter(
         state: &Entity<AppState>,
         list_view: &Entity<ClipboardListView>,
         tag_id: i64,
         cx: &mut App,
     ) {
-        let items = state.update(cx, |state, _cx| {
-            state.toggle_tag_filter(tag_id);
-            state.visible_items()
-        });
-        list_view.update(cx, |list, cx| list.set_items(items, cx));
+        Self::select(state, list_view, Category::Tag(tag_id), cx);
     }
 
+    /// Narrow to one content type, or back to "all" if it was already the one.
     fn apply_type_filter(
         state: &Entity<AppState>,
         list_view: &Entity<ClipboardListView>,
         type_name: &'static str,
         cx: &mut App,
     ) {
+        Self::select(state, list_view, Category::Type(type_name.to_string()), cx);
+    }
+
+    /// The strip holds one choice at a time, whichever button is pressed and
+    /// whichever way it is reached — the arrow keys go through the same call.
+    fn select(
+        state: &Entity<AppState>,
+        list_view: &Entity<ClipboardListView>,
+        category: Category,
+        cx: &mut App,
+    ) {
         let items = state.update(cx, |state, _cx| {
-            state.toggle_type_filter(type_name);
+            state.select_category(category);
             state.visible_items()
         });
         list_view.update(cx, |list, cx| list.set_items(items, cx));

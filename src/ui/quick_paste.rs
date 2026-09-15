@@ -901,7 +901,14 @@ impl Render for QuickPasteView {
                                             let v = view_entity.clone();
                                             move |_, _window, cx| {
                                                 s.update(cx, |s, _cx| {
-                                                    s.toggle_type_filter(&k);
+                                                    // Same strip as the main
+                                                    // window, so the same one
+                                                    // choice at a time.
+                                                    s.select_category(
+                                                        crate::core::filters::Category::Type(
+                                                            k.clone(),
+                                                        ),
+                                                    );
                                                 });
                                                 v.update(cx, |view, cx| view.reset_scroll(cx));
                                             }
@@ -1029,7 +1036,9 @@ impl Render for QuickPasteView {
                                     let v = view_entity.clone();
                                     move |_, _window, cx| {
                                         s.update(cx, |s, _cx| {
-                                            s.toggle_tag_filter(tag_id);
+                                            s.select_category(
+                                                crate::core::filters::Category::Tag(tag_id),
+                                            );
                                         });
                                         v.update(cx, |view, cx| view.reset_scroll(cx));
                                     }

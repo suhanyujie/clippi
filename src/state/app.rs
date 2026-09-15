@@ -608,14 +608,6 @@ impl AppState {
         self.reload_items();
     }
 
-    /// Toggle a content-type filter and reload visible items.
-    /// Each type filter is now independent (image/file are separate).
-    pub fn toggle_type_filter(&mut self, type_name: &str) {
-        self.filters.toggle_type(type_name);
-        self.selected_ids.clear();
-        self.reload_items();
-    }
-
     /// The categories the arrow keys step through: "all", every visible type
     /// filter in the order the user arranged them, then every tag they pinned.
     ///
@@ -649,15 +641,52 @@ impl AppState {
     /// single position, so it reads as "all": the arrow keys choose one category
     /// and start over rather than trying to guess where a combination sits.
     fn current_category(&self, cycle: &[Category]) -> usize {
-        let types = self.filters.active_types();
-        let tags = &self.filters.tag_ids;
+        let current = self.current_category_value();
+        cycle.iter().position(|c| *c == current).unwrap_or(0)
+    }
 
-        let current = match (types, tags.as_slice()) {
+    /// Which single category the filters currently express.
+    ///
+    /// A combination built elsewhere — two tags chosen in the tag panel, say —
+    /// has no single position in the strip, so it reads as "all". Both the
+    /// arrow keys and a click on the strip then start over from one choice
+    /// rather than trying to guess where a combination sits.
+    pub fn current_category_value(&self) -> Category {
+        match (self.filters.active_types(), self.filters.tag_ids.as_slice()) {
             ([only], []) => Category::Type(only.clone()),
             ([], [only]) => Category::Tag(*only),
             _ => Category::All,
+        }
+    }
+
+    /// Narrow the strip to exactly one category.
+    fn apply_category(&mut self, category: &Category) {
+        match category {
+            Category::All => self.filters.clear_strip(),
+            Category::Type(key) => {
+                self.filters.clear_strip();
+                self.filters.set_single_type(Some(key));
+            }
+            Category::Tag(id) => self.filters.set_single_tag(*id),
+        }
+    }
+
+    /// Choose a category from the strip, or go back to "all" when it was
+    /// already the one showing.
+    ///
+    /// The strip is a single choice however it is reached — clicking a button
+    /// and arrowing onto it now mean the same thing. Clicking used to toggle
+    /// each button independently, which let several light up at once and, since
+    /// types and tags are ANDed in `db_where`, usually showed nothing for it.
+    pub fn select_category(&mut self, category: Category) {
+        let next = if self.current_category_value() == category {
+            Category::All
+        } else {
+            category
         };
-        cycle.iter().position(|c| *c == current).unwrap_or(0)
+        self.apply_category(&next);
+        self.selected_ids.clear();
+        self.reload_items();
     }
 
     /// Step to the next or previous category and reload.
@@ -676,14 +705,7 @@ impl AppState {
         let chosen = cycle[next as usize].clone();
         let total = cycle.len();
 
-        match &chosen {
-            Category::All => self.filters.clear_strip(),
-            Category::Type(key) => {
-                self.filters.clear_strip();
-                self.filters.set_single_type(Some(key));
-            }
-            Category::Tag(id) => self.filters.set_single_tag(*id),
-        }
+        self.apply_category(&chosen);
         self.selected_ids.clear();
         self.reload_items();
 
@@ -3015,6 +3037,62 @@ mod tests {
     }
 
     #[test]
+    fn clicking_a_category_replaces_the_previous_one() {
+        let mut state = strip_state();
+
+        state.select_category(Category::Type("image".into()));
+        assert_eq!(state.filters.active_types(), ["image"]);
+
+        state.select_category(Category::Type("file".into()));
+        assert_eq!(
+            state.filters.active_types(),
+            ["file"],
+            "one button at a time, not two"
+        );
+
+        state.select_category(Category::Tag(5));
+        assert!(state.filters.active_types().is_empty());
+        assert_eq!(state.filters.tag_ids, [5]);
+    }
+
+    #[test]
+    fn clicking_the_selected_category_goes_back_to_all() {
+        let mut state = strip_state();
+
+        state.select_category(Category::Type("image".into()));
+        state.select_category(Category::Type("image".into()));
+
+        assert!(state.filters.active_types().is_empty());
+        assert!(state.filters.tag_ids.is_empty());
+    }
+
+    #[test]
+    fn clicking_resolves_a_combination_made_elsewhere() {
+        // The tag panel is deliberately multi-select, so the filters can hold a
+        // combination the strip has no single position for. One click must land
+        // on one category rather than adding to the pile.
+        let mut state = strip_state();
+        state.filters.tag_ids = vec![5, 6];
+        state.filters.toggle_type("image");
+
+        state.select_category(Category::Type("file".into()));
+
+        assert_eq!(state.filters.active_types(), ["file"]);
+        assert!(state.filters.tag_ids.is_empty());
+    }
+
+    #[test]
+    fn clicking_and_arrowing_agree_on_where_the_strip_is() {
+        let mut state = strip_state();
+
+        state.select_category(Category::Type("image".into()));
+        // "image" is position 1; one step forward must reach position 2.
+        state.cycle_type_filter(1);
+
+        assert_eq!(state.filters.active_types(), ["file"]);
+    }
+
+    #[test]
     fn moving_a_pinned_tag_changes_its_place_in_the_strip() {
         let mut state = strip_state();
         state.settings.pinned_tag_ids = vec![5, 6];
@@ -3657,7 +3735,7 @@ mod tests {
         assert!(visible[0].id < 0);
         assert!(FileData::from_json(&visible[0].file_data).is_transfer());
 
-        state.toggle_type_filter("file");
+        state.select_category(Category::Type("file".into()));
         let visible_after_db_filter = state.visible_items();
         assert_eq!(visible_after_db_filter.len(), 1);
         assert!(visible_after_db_filter[0].id < 0);
